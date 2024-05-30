@@ -6,6 +6,7 @@ import {
     MDBCol,
     MDBContainer,
     MDBIcon,
+    MDBInput,
     MDBRow,
     MDBTextArea,
     MDBTypography,
@@ -16,9 +17,6 @@ import {io, Socket} from 'socket.io-client';
 import {addResponseMessage} from "react-chat-widget";
 import 'react-chat-widget/lib/styles.css';
 import 'chatbot/css/chatbot.min.css'
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-expect-error
-import * as chatbot from 'chatbot/js/chatbot.js';
 
 
 export default function Chat() {
@@ -36,6 +34,7 @@ export default function Chat() {
     const [chatMessageToSend, setChatMessageToSend] = useState('');
     const [statusLevel, setStatusLevel] = useState<string>('free');
     const [statusLevelOther, setStatusLevelOther] = useState<string>('free');
+    const [isUserOnline, setIsUserOnline] = useState<boolean>(false);
     useEffect(() => {
         socket.current = io('http://localhost:3000', {
             query: {
@@ -263,30 +262,131 @@ export default function Chat() {
     // };
 
     function AIBusyChatBox() {
-        const config = {
-            // what inputs should the bot listen to? this selector should point to at least one input field
-            inputs: '#humanInput',
-            // if you want to show the capabilities of the bot under the search input
-            inputCapabilityListing: true,
-            // optionally, you can specify which conversation engines the bot should use, e.g. webknox, spoonacular, or duckduckgo
-            engines: [chatbot.Engines.duckduckgo()],
-            // you can specify what should happen to newly added messages
-            addChatEntryCallback: function (entryDiv: { slideDown: () => void; },) {
-                entryDiv.slideDown();
-            }
+        const [inputValue, setInputValue] = useState<string>('');
+        const [chatMessages, setChatMessages] = useState<Message[]>([]);
+
+        type Message = {
+            text: string;
+            isUser: boolean;
         };
-        chatbot.init(config);
+
+        type ChatMessageProps = {
+            message: Message;
+        };
+
+        const ChatMessage: React.FC<ChatMessageProps> = ({message}) => {
+            return (
+                <div style={{textAlign: message.isUser ? 'right' : 'left'}}>
+                    <p>{message.text}</p>
+                </div>
+            );
+        };
+
+        const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+            setInputValue(event.target.value);
+        };
+
+        const handleSendClick = () => {
+            // First, send a GET request to obtain the API token
+            fetch('https://cors-anywhere.herokuapp.com/https://duckduckgo.com/duckchat/v1/status', {
+                method: 'GET',
+                headers: {
+                    'x-vqd-accept': '1'
+                }
+            })
+                .then(response => {
+                    // Extract the API token from the 'x-vqd-4' header
+                    const apiToken = response.headers.get('x-vqd-4');
+                    console.log('API token:', apiToken);
+
+                    // Add the new message to the chatMessages array
+                    setChatMessages([...chatMessages, {text: inputValue, isUser: true}]);
+                    // Clear the input field
+                    setInputValue('');
+
+                    // Then, send a POST request to the DuckDuckGo API with the obtained API token
+                    return fetch('https://cors-anywhere.herokuapp.com/https://duckduckgo.com/duckchat/v1/chat', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-vqd-4': apiToken // Use the obtained API token here
+                        },
+                        body: JSON.stringify({
+                            model: 'gpt-3.5-turbo-0125',
+                            messages: [
+                                {role: 'user', content: inputValue}
+                            ]
+                        })
+                    });
+                })
+                .then(response => {
+                    const reader = response.body?.getReader();
+                    return new ReadableStream({
+                        start(controller) {
+                            function push() {
+                                reader?.read().then(({done, value}) => {
+                                    if (done) {
+                                        controller.close();
+                                        return;
+                                    }
+                                    controller.enqueue(value);
+                                    return push();
+                                })
+                            }
+
+                            return push();
+                        }
+                    });
+                })
+                .then(stream => {
+                    return new Response(stream, {headers: {"Content-Type": "text/html"}}).text();
+                })
+                .then(result => {
+                    const messages = result.split('\n');
+                    let completeMessage = '';
+                    messages.forEach(message => {
+                        if (message.startsWith('data:')) {
+                            try {
+                                const data = JSON.parse(message.slice(5));
+                                if (data.message) {
+                                    console.log('AI message:', data.message);
+                                    completeMessage += data.message + ' ';
+                                }
+                            } catch (error) {
+                                console.error('Error parsing JSON:', error);
+                            }
+                        }
+                    });
+                    console.log(completeMessage);
+                    const aiMessage = {
+                        text: completeMessage,
+                        isUser: false
+                    };
+                    setChatMessages(prevMessages => [...prevMessages, aiMessage]);
+                })
+                .catch((error) => {
+                    console.error('Error:', error);
+                });
+        };
+
         return (
             <div>
-                <div id="chatBotCommandDescription"></div>
-                <input id="humanInput" type="text"/>
-                <div id="chatBot">
-                    <div id="chatBotThinkingIndicator"></div>
-                    <div id="chatBotHistory"></div>
-                </div>
+                <MDBCol md="6" lg="7" xl="8">
+                    <MDBTypography listUnStyled style={{maxHeight: '500px', overflowY: 'auto'}}>
+                        <h2>Chat With AI</h2>
+                        {chatMessages.map((message, index) => (
+                            <ChatMessage key={index} message={message}/>
+                        ))}
+                        <MDBInput label="Your message" id="formControlLg" size="lg" value={inputValue}
+                                  onChange={handleInputChange}/>
+                        <button onClick={handleSendClick}>Send</button>
+                        <MDBBtn color="danger" rounded className="float-end me-2"
+                                onClick={() => setStatusFunc(statusLevel === 'busy' ? 'free' : 'busy')}>
+                            {statusLevel === 'busy' ? 'Set free' : 'Set busy'}
+                        </MDBBtn>
+                    </MDBTypography>
+                </MDBCol>
             </div>
-
-
         );
     }
 
@@ -312,8 +412,10 @@ export default function Chat() {
     const setStatusFunc = (status: string) => {
         if (status === 'busy') {
             socket.current?.emit('setBusy', {loggedInUser: loggedInUser});
+            setIsUserOnline(true)
         } else if (status === 'free') {
             socket.current?.emit('setFree', {loggedInUser: loggedInUser});
+            setIsUserOnline(false)
         }
     }
     // useEffect(() => {
@@ -373,7 +475,7 @@ export default function Chat() {
                         </MDBCardBody>
                     </MDBCard>
                 </MDBCol>
-                {statusLevelOther === 'busy' || true ? (
+                {!isUserOnline || statusLevelOther === 'busy' ? (
                     <AIBusyChatBox/>
                 ) : (
                     <MDBCol md="6" lg="7" xl="8">
