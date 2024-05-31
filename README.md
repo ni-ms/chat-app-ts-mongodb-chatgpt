@@ -38,6 +38,7 @@ npm install
 
 #### 2. Run ```npm run dev``` in each folder
 By default, the back_end runs at localhost 3000 and the front end at http://localhost:5173/
+If the chat api doesnt work, go to https://cors-anywhere.herokuapp.com/corsdemo and click on the "request temporary access to demo server" button and try again.
 
 The api routes for the app are:
 ## API Routes
